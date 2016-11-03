@@ -1,5 +1,11 @@
 package org.datasyslab.geospark.spatialOperator;
 
+/**
+ * 
+ * @author Arizona State University DataSystems Lab
+ *
+ */
+
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.GeometryFactory;
@@ -49,7 +55,7 @@ public class RectangleRangeTest {
         input = RectangleRangeTest.class.getClassLoader().getResourceAsStream("rectangle.test.properties");
 
         //Hard code to a file in resource folder. But you can replace it later in the try-catch field in your hdfs system.
-        InputLocation = "file://"+RectangleRDDTest.class.getClassLoader().getResource("primaryroads.csv").getPath();
+        InputLocation = "file://"+RectangleRangeTest.class.getClassLoader().getResource("primaryroads.csv").getPath();
 
         offset = 0;
         splitter = "";
@@ -61,11 +67,12 @@ public class RectangleRangeTest {
             prop.load(input);
             // There is a field in the property file, you can edit your own file location there.
             // InputLocation = prop.getProperty("inputLocation");
+            InputLocation = "file://"+RectangleRangeTest.class.getClassLoader().getResource(prop.getProperty("inputLocation")).getPath();
             offset = Integer.parseInt(prop.getProperty("offset"));
             splitter = prop.getProperty("splitter");
             indexType = prop.getProperty("indexType");
             numPartitions = Integer.parseInt(prop.getProperty("numPartitions"));
-            queryEnvelope=new Envelope (-85.01,-84.01,34.01,35.01);
+            queryEnvelope=new Envelope (-90.01,-80.01,30.01,40.01);
             loopTimes=5;
         } catch (IOException ex) {
             ex.printStackTrace();
@@ -92,7 +99,7 @@ public class RectangleRangeTest {
     		long resultSize = RangeQuery.SpatialRangeQuery(rectangleRDD, queryEnvelope, 0).getRawRectangleRDD().count();
     		assert resultSize>-1;
     	}
-        
+    	assert RangeQuery.SpatialRangeQuery(rectangleRDD, queryEnvelope, 0).getRawRectangleRDD().take(10).get(1).getUserData().toString()!=null;
     }
     @Test
     public void testSpatialRangeQueryUsingIndex() throws Exception {
@@ -103,7 +110,7 @@ public class RectangleRangeTest {
     		long resultSize = RangeQuery.SpatialRangeQueryUsingIndex(rectangleRDD, queryEnvelope, 0).getRawRectangleRDD().count();
     		assert resultSize>-1;
     	}
-        
+    	assert RangeQuery.SpatialRangeQueryUsingIndex(rectangleRDD, queryEnvelope, 0).getRawRectangleRDD().take(10).get(1).getUserData().toString()!=null;
     }
 
 }

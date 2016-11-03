@@ -1,5 +1,11 @@
 package org.datasyslab.geospark.spatialOperator;
 
+/**
+ * 
+ * @author Arizona State University DataSystems Lab
+ *
+ */
+
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.GeometryFactory;
@@ -49,7 +55,7 @@ public class RectangleKnnTest {
         input = RectangleKnnTest.class.getClassLoader().getResourceAsStream("rectangle.test.properties");
 
         //Hard code to a file in resource folder. But you can replace it later in the try-catch field in your hdfs system.
-        InputLocation = "file://"+RectangleRDDTest.class.getClassLoader().getResource("primaryroads.csv").getPath();
+        InputLocation = "file://"+RectangleKnnTest.class.getClassLoader().getResource("primaryroads.csv").getPath();
 
         offset = 0;
         splitter = "";
@@ -61,6 +67,7 @@ public class RectangleKnnTest {
             prop.load(input);
             // There is a field in the property file, you can edit your own file location there.
             // InputLocation = prop.getProperty("inputLocation");
+            InputLocation = "file://"+RectangleKnnTest.class.getClassLoader().getResource(prop.getProperty("inputLocation")).getPath();
             offset = Integer.parseInt(prop.getProperty("offset"));
             splitter = prop.getProperty("splitter");
             indexType = prop.getProperty("indexType");
@@ -93,6 +100,8 @@ public class RectangleKnnTest {
     	{
     		List<Envelope> result = KNNQuery.SpatialKnnQuery(rectangleRDD, queryPoint, 5);
     		assert result.size()>-1;
+    		assert result.get(0).getUserData().toString()!=null;
+    		//System.out.println(result.get(0).getUserData().toString());
     	}
 
     }
@@ -104,6 +113,8 @@ public class RectangleKnnTest {
     	{
     		List<Envelope> result = KNNQuery.SpatialKnnQueryUsingIndex(rectangleRDD, queryPoint, 5);
     		assert result.size()>-1;
+    		assert result.get(0).getUserData().toString()!=null;
+    		//System.out.println(result.get(0).getUserData().toString());
     	}
 
     }

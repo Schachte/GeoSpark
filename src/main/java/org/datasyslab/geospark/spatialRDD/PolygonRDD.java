@@ -1,7 +1,10 @@
-/*
+package org.datasyslab.geospark.spatialRDD;
+
+/**
+ * 
+ * @author Arizona State University DataSystems Lab
  *
  */
-package org.datasyslab.geospark.spatialRDD;
 
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.Envelope;
@@ -157,6 +160,66 @@ public class PolygonRDD implements Serializable {
         return rawPolygonRDD;
     }
 
+    /**
+     * Transform a rawRectangleRDD to a RectangelRDD with a a specified spatial partitioning grid type and the number of partitions
+     * @param rawPolygonRDD
+     * @param gridType
+     * @param numPartitions
+     */
+    public PolygonRDD(JavaRDD<Polygon> rawPolygonRDD, String gridType, Integer numPartitions)
+    {
+    	this.setRawPolygonRDD(rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY()));
+    	 this.rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY());
+         totalNumberOfRecords = this.rawPolygonRDD.count();
+
+         doSpatialPartitioning(gridType,numPartitions);
+
+         //final Broadcast<HashSet<EnvelopeWithGrid>> gridEnvelopBroadcasted = sc.broadcast(grids);
+         JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
+                 new PairFlatMapFunction<Polygon, Integer, Polygon>() {
+                     @Override
+                     public Iterator<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
+                     	HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
+                         return result.iterator();
+                     }
+                 }
+         );
+         this.rawPolygonRDD.unpersist();
+         this.gridPolygonRDD = unPartitionedGridPolygonRDD.partitionBy(new SpatialPartitioner(grids.size()));//.persist(StorageLevel.DISK_ONLY());
+
+    }
+    
+    
+    /**
+     * Transform a rawRectangleRDD to a RectangelRDD with a a specified spatial partitioning grid type and the number of partitions
+     * @param rawPolygonRDD
+     * @param gridType
+     */
+    public PolygonRDD(JavaRDD<Polygon> rawPolygonRDD, String gridType)
+    {
+    	this.setRawPolygonRDD(rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY()));
+    	this.rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY());
+    	totalNumberOfRecords = this.rawPolygonRDD.count();
+    	int numPartitions=this.rawPolygonRDD.getNumPartitions();
+
+    	doSpatialPartitioning(gridType,numPartitions);
+
+    	//final Broadcast<HashSet<EnvelopeWithGrid>> gridEnvelopBroadcasted = sc.broadcast(grids);
+    	JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
+    			new PairFlatMapFunction<Polygon, Integer, Polygon>() {
+    				@Override
+    				public Iterator<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
+    					HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
+    					return result.iterator();
+    				}
+    			}
+         );
+    	this.rawPolygonRDD.unpersist();
+    	this.gridPolygonRDD = unPartitionedGridPolygonRDD.partitionBy(new SpatialPartitioner(grids.size()));//.persist(StorageLevel.DISK_ONLY());
+
+    }
+
+    
     //todo: remove offset.
     /**
      * Initialize one raw SpatialRDD with a raw input file and do spatial partitioning on it
@@ -164,7 +227,7 @@ public class PolygonRDD implements Serializable {
      * @param inputLocation specify the input path which can be a HDFS path
      * @param offSet specify the starting column of valid spatial attributes in CSV and TSV. e.g. XXXX,XXXX,x,y,XXXX,XXXX
      * @param splitter specify the input file format: csv, tsv, geojson, wkt
-     * @param gridType specify the spatial partitioning method: X-Y (equal size grids), strtree, quadtree
+     * @param gridType specify the spatial partitioning method: equalgrid, rtree, voronoi
      * @param numPartitions specify the partition number of the SpatialRDD
      */
     public PolygonRDD(JavaSparkContext sc, String inputLocation, Integer offSet, String splitter, String gridType, Integer numPartitions) {
@@ -172,121 +235,15 @@ public class PolygonRDD implements Serializable {
         this.rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY());
         totalNumberOfRecords = this.rawPolygonRDD.count();
 
-        int sampleNumberOfRecords = RDDSampleUtils.getSampleNumbers(numPartitions, totalNumberOfRecords);
+        doSpatialPartitioning(gridType,numPartitions);
 
-        ArrayList<Polygon> polygonSampleList = new ArrayList<Polygon> (rawPolygonRDD.takeSample(false, sampleNumberOfRecords));
-
-        this.boundary();
-
-
-
-
-
-
-        if(sampleNumberOfRecords == 0) {
-            //If the sample Number is too small, we will just use one grid instead.
-            System.err.println("The grid size is " + numPartitions * numPartitions + "for 2-dimension X-Y grid" + numPartitions + " for 1-dimension grid");
-            System.err.println("The sample size is " + totalNumberOfRecords /100);
-            System.err.println("input size is too small, we can not guarantee one grid have at least one record in it");
-            System.err.println("we will just build one grid for all input");
-            grids = new HashSet<EnvelopeWithGrid>();
-            grids.add(new EnvelopeWithGrid(this.boundaryEnvelope, 0));
-        }  else if (gridType.equals("equalgrid")) {
-        	EqualPartitioning equalPartitioning =new EqualPartitioning(this.boundaryEnvelope,numPartitions);
-        	grids=equalPartitioning.getGrids();
-        }
-        else if(gridType.equals("hilbert"))
-        {
-        	HilbertPartitioning hilbertPartitioning=new HilbertPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=hilbertPartitioning.getGrids();
-        }
-        else if(gridType.equals("rtree"))
-        {
-        	RtreePartitioning rtreePartitioning=new RtreePartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=rtreePartitioning.getGrids();
-        }
-        else if(gridType.equals("voronoi"))
-        {
-        	VoronoiPartitioning voronoiPartitioning=new VoronoiPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=voronoiPartitioning.getGrids();
-        }
-        else
-        {
-        	throw new IllegalArgumentException("Partitioning method is not recognized, please check again.");
-        }
         //final Broadcast<HashSet<EnvelopeWithGrid>> gridEnvelopBroadcasted = sc.broadcast(grids);
         JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
                 new PairFlatMapFunction<Polygon, Integer, Polygon>() {
                     @Override
-                    public Iterable<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
+                    public Iterator<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
                     	HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
-                        return result;
-                    }
-                }
-        );
-        this.rawPolygonRDD.unpersist();
-        this.gridPolygonRDD = unPartitionedGridPolygonRDD.partitionBy(new SpatialPartitioner(grids.size()));//.persist(StorageLevel.DISK_ONLY());
-
-    
-        
-    }
-    
-    public PolygonRDD(JavaSparkContext sc, String inputLocation, Integer offSet, String splitter, String gridType) {
-        this.rawPolygonRDD = sc.textFile(inputLocation).map(new PolygonFormatMapper(offSet, splitter));
-        this.rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY());
-        totalNumberOfRecords = this.rawPolygonRDD.count();
-
-        int numPartitions=this.rawPolygonRDD.getNumPartitions();
-        
-        int sampleNumberOfRecords = RDDSampleUtils.getSampleNumbers(numPartitions, totalNumberOfRecords);
-
-        ArrayList<Polygon> polygonSampleList = new ArrayList<Polygon> (rawPolygonRDD.takeSample(false, sampleNumberOfRecords));
-
-        this.boundary();
-
-
-
-
-
-
-        if(sampleNumberOfRecords == 0) {
-            //If the sample Number is too small, we will just use one grid instead.
-            System.err.println("The grid size is " + numPartitions * numPartitions + "for 2-dimension X-Y grid" + numPartitions + " for 1-dimension grid");
-            System.err.println("The sample size is " + totalNumberOfRecords /100);
-            System.err.println("input size is too small, we can not guarantee one grid have at least one record in it");
-            System.err.println("we will just build one grid for all input");
-            grids = new HashSet<EnvelopeWithGrid>();
-            grids.add(new EnvelopeWithGrid(this.boundaryEnvelope, 0));
-        }  else if (gridType.equals("equalgrid")) {
-        	EqualPartitioning equalPartitioning =new EqualPartitioning(this.boundaryEnvelope,numPartitions);
-        	grids=equalPartitioning.getGrids();
-        }
-        else if(gridType.equals("hilbert"))
-        {
-        	HilbertPartitioning hilbertPartitioning=new HilbertPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=hilbertPartitioning.getGrids();
-        }
-        else if(gridType.equals("rtree"))
-        {
-        	RtreePartitioning rtreePartitioning=new RtreePartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=rtreePartitioning.getGrids();
-        }
-        else if(gridType.equals("voronoi"))
-        {
-        	VoronoiPartitioning voronoiPartitioning=new VoronoiPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
-        	grids=voronoiPartitioning.getGrids();
-        }
-        else
-        {
-        	throw new IllegalArgumentException("Partitioning method is not recognized, please check again.");
-        }
-        final Broadcast<HashSet<EnvelopeWithGrid>> gridEnvelopBroadcasted = sc.broadcast(grids);
-        JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
-                new PairFlatMapFunction<Polygon, Integer, Polygon>() {
-                    @Override
-                    public Iterable<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
-                    	HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
-                        return result;
+                        return result.iterator();
                     }
                 }
         );
@@ -298,8 +255,84 @@ public class PolygonRDD implements Serializable {
     }
     
     /**
+     *Initialize one raw SpatialRDD with a raw input file and do spatial partitioning on it without specifying the number of partitions.
+     * @param sc spark SparkContext which defines some Spark configurations
+     * @param inputLocation specify the input path which can be a HDFS path
+     * @param offSet specify the starting column of valid spatial attributes in CSV and TSV. e.g. XXXX,XXXX,x,y,XXXX,XXXX
+     * @param splitter specify the input file format: csv, tsv, geojson, wkt
+     * @param gridType specify the spatial partitioning method: equalgrid, rtree, voronoi
+     */
+    public PolygonRDD(JavaSparkContext sc, String inputLocation, Integer offSet, String splitter, String gridType) {
+        this.rawPolygonRDD = sc.textFile(inputLocation).map(new PolygonFormatMapper(offSet, splitter));
+        this.rawPolygonRDD.persist(StorageLevel.MEMORY_ONLY());
+        totalNumberOfRecords = this.rawPolygonRDD.count();
+
+        int numPartitions=this.rawPolygonRDD.getNumPartitions();
+        
+        doSpatialPartitioning(gridType,numPartitions);
+
+        //final Broadcast<HashSet<EnvelopeWithGrid>> gridEnvelopBroadcasted = sc.broadcast(grids);
+        JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
+                new PairFlatMapFunction<Polygon, Integer, Polygon>() {
+                    @Override
+                    public Iterator<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
+                    	HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
+                        return result.iterator();
+                    }
+                }
+        );
+        this.rawPolygonRDD.unpersist();
+        this.gridPolygonRDD = unPartitionedGridPolygonRDD.partitionBy(new SpatialPartitioner(grids.size()));//.persist(StorageLevel.DISK_ONLY());
+
+    
+        
+    }
+    
+    private void doSpatialPartitioning(String gridType, int numPartitions)
+    {
+        int sampleNumberOfRecords = RDDSampleUtils.getSampleNumbers(numPartitions, totalNumberOfRecords);
+
+        ArrayList<Polygon> polygonSampleList = new ArrayList<Polygon> (rawPolygonRDD.takeSample(false, sampleNumberOfRecords));
+
+        this.boundary();
+
+        if(sampleNumberOfRecords == 0) {
+            //If the sample Number is too small, we will just use one grid instead.
+            System.err.println("The grid size is " + numPartitions * numPartitions + "for 2-dimension X-Y grid" + numPartitions + " for 1-dimension grid");
+            System.err.println("The sample size is " + totalNumberOfRecords /100);
+            System.err.println("input size is too small, we can not guarantee one grid have at least one record in it");
+            System.err.println("we will just build one grid for all input");
+            grids = new HashSet<EnvelopeWithGrid>();
+            grids.add(new EnvelopeWithGrid(this.boundaryEnvelope, 0));
+        }  else if (gridType.equals("equalgrid")) {
+        	EqualPartitioning equalPartitioning =new EqualPartitioning(this.boundaryEnvelope,numPartitions);
+        	grids=equalPartitioning.getGrids();
+        }
+        else if(gridType.equals("hilbert"))
+        {
+        	HilbertPartitioning hilbertPartitioning=new HilbertPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
+        	grids=hilbertPartitioning.getGrids();
+        }
+        else if(gridType.equals("rtree"))
+        {
+        	RtreePartitioning rtreePartitioning=new RtreePartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
+        	grids=rtreePartitioning.getGrids();
+        }
+        else if(gridType.equals("voronoi"))
+        {
+        	VoronoiPartitioning voronoiPartitioning=new VoronoiPartitioning(polygonSampleList.toArray(new Polygon[polygonSampleList.size()]),this.boundaryEnvelope,numPartitions);
+        	grids=voronoiPartitioning.getGrids();
+        }
+        else
+        {
+        	throw new IllegalArgumentException("Partitioning method is not recognized, please check again.");
+        }
+    }
+
+    
+    /**
      * Create an IndexedRDD and cache it in memory. Need to have a grided RDD first. The index is build on each partition.
-     * @param indexType Specify the index type: strtree, quadtree
+     * @param indexType Specify the index type: rtree, quadtree
      */
     public void buildIndex(String indexType) {
 
@@ -309,7 +342,7 @@ public class PolygonRDD implements Serializable {
             this.indexedRDDNoId =  this.rawPolygonRDD.mapPartitions(new FlatMapFunction<Iterator<Polygon>,STRtree>()
             		{
 						@Override
-						public Iterable<STRtree> call(Iterator<Polygon> t)
+						public Iterator<STRtree> call(Iterator<Polygon> t)
 								throws Exception {
 							// TODO Auto-generated method stub
 							 STRtree rt = new STRtree();
@@ -319,7 +352,7 @@ public class PolygonRDD implements Serializable {
 							}
 							HashSet<STRtree> result = new HashSet<STRtree>();
 			                    result.add(rt);
-			                    return result;
+			                    return result.iterator();
 						}
             	
             		});
@@ -453,9 +486,9 @@ public class PolygonRDD implements Serializable {
 		JavaPairRDD<Integer,Polygon> unPartitionedGridPolygonRDD = this.rawPolygonRDD.flatMapToPair(
                 new PairFlatMapFunction<Polygon, Integer, Polygon>() {
                     @Override
-                    public Iterable<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
+                    public Iterator<Tuple2<Integer, Polygon>> call(Polygon polygon) throws Exception {
                     	HashSet<Tuple2<Integer, Polygon>> result = PartitionJudgement.getPartitionID(grids,polygon);
-                        return result;
+                        return result.iterator();
                     }
                 }
         );
